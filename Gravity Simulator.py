@@ -2,7 +2,7 @@ import sys
 import math
 import random
 from PyQt6.QtCore import QTimer, QPointF, Qt, QPoint
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPalette
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPalette, QFont
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
                              QDockWidget, QComboBox, QDialog, QDoubleSpinBox,
@@ -18,7 +18,7 @@ class Particle:
         self.ay = 0.0
         self.radius = math.sqrt(mass)
         self.color = color
-
+        self.trail = []  # list of previous positions
 
 class Canvas(QWidget):
     def __init__(self, parent=None):
@@ -35,20 +35,53 @@ class Canvas(QWidget):
         self.setAutoFillBackground(True)
         self.setPalette(pal)
 
+    def draw_mass(self, painter, particle):
+        # Calculate text color based on particle color brightness
+        color = particle.color
+        brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114)
+        text_color = QColor(0, 0, 0) if brightness > 128 else QColor(255, 255, 255)
+
+        painter.setPen(QPen(text_color))
+        painter.setFont(QFont("Arial", 10))
+        text = f"{int(particle.mass)}"
+
+        # Calculate text position
+        text_rect = painter.fontMetrics().boundingRect(text)
+        x = particle.x - text_rect.width() / 2
+        y = particle.y + text_rect.height() / 2
+
+        painter.drawText(QPointF(x, y), text)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # Apply view transformation
         painter.translate(self.offset)
         painter.scale(self.scale, self.scale)
-
-        # Remove outline by setting pen to NoPen
         painter.setPen(Qt.PenStyle.NoPen)
 
         for p in self.particles:
+            # Draw trail
+            if len(p.trail) >= 2:
+                trail_pen = QPen(p.color)
+                trail_pen.setWidthF(0.5)
+                trail_pen.setColor(p.color.lighter(150))
+                painter.setPen(trail_pen)
+                for i in range(len(p.trail) - 1):
+                    painter.drawLine(p.trail[i], p.trail[i + 1])
+
+            # Draw particle
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(p.color))
             painter.drawEllipse(QPointF(p.x, p.y), p.radius, p.radius)
+
+            # Draw velocity vector
+            painter.setPen(QPen(Qt.GlobalColor.white, 0.5))
+            painter.drawLine(QPointF(p.x, p.y), QPointF(p.x + p.vx, p.y + p.vy))
+
+            # Draw mass text
+            painter.setPen(QPen(Qt.GlobalColor.white))
+            self.draw_mass(painter, p)
+
 
     def add_particle(self, particle):
         self.particles.append(particle)
@@ -87,6 +120,11 @@ class Canvas(QWidget):
             p.x += p.vx * dt
             p.y += p.vy * dt
 
+            # Add to trail
+            p.trail.append(QPointF(p.x, p.y))
+            if len(p.trail) > 100:  # limit trail length
+                p.trail.pop(0)
+
         self.handle_collisions()
         self.update()
 
@@ -116,6 +154,28 @@ class Canvas(QWidget):
             self.particles.remove(p)
 
 
+class PresetDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Preset System")
+
+        layout = QVBoxLayout()
+        self.list_widget = QComboBox()
+        self.list_widget.addItems([
+            "Binary Stars",
+            "Solar System",
+            "Galaxy Core",
+            "Random Cluster"
+        ])
+
+        layout.addWidget(self.list_widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.setLayout(layout)
+
 class GravitySimulator(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -138,6 +198,111 @@ class GravitySimulator(QMainWindow):
         self.current_mass = 100.0
         self.current_vx = 0.0
         self.current_vy = 0.0
+
+        preset_btn = QPushButton("Preset Systems")
+        preset_btn.clicked.connect(self.show_presets)
+
+    def show_presets(self):
+        dialog = PresetDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.load_preset(dialog.list_widget.currentText())
+
+    def load_preset(self, name):
+        self.canvas.particles = []
+
+        if name == "Binary Stars":
+            self.create_binary_stars()
+        elif name == "Solar System":
+            self.create_solar_system()
+        elif name == "Galaxy Core":
+            self.create_galaxy_core()
+        elif name == "Random Cluster":
+            self.create_random_cluster()
+
+        self.canvas.offset = QPointF(0, 0)
+        self.canvas.scale = 1.0
+        self.canvas.update()
+
+    # Preset system creation methods
+    def create_binary_stars(self):
+        sun_color = QColor(255, 255, 0)
+        offset = 300
+        velocity = 1.5
+
+        self.canvas.add_particle(Particle(
+            QPointF(-offset, 0),
+            mass=1000,
+            velocity=(0, velocity),
+            color=sun_color
+        ))
+        self.canvas.add_particle(Particle(
+            QPointF(offset, 0),
+            mass=1000,
+            velocity=(0, -velocity),
+            color=sun_color
+        ))
+
+    def create_solar_system(self):
+        sun_color = QColor(255, 255, 0)
+        planet_colors = [QColor(100, 100, 255), QColor(255, 100, 100), QColor(100, 255, 100)]
+
+        # Sun
+        self.canvas.add_particle(Particle(
+            QPointF(0, 0),
+            mass=5000,
+            velocity=(0, 0),
+            color=sun_color
+        ))
+
+        # Planets
+        for i in range(3):
+            distance = 150 * (i + 1)
+            orbital_speed = math.sqrt(self.canvas.G * 5000 / distance)
+            self.canvas.add_particle(Particle(
+                QPointF(distance, 0),
+                mass=10 + i * 5,
+                velocity=(0, orbital_speed),
+                color=planet_colors[i]
+            ))
+
+    def create_galaxy_core(self):
+        # Central black hole
+        self.canvas.add_particle(Particle(
+            QPointF(0, 0),
+            mass=10000,
+            velocity=(0, 0),
+            color=QColor(0, 0, 0)
+        ))
+
+        # Surrounding stars
+        for i in range(50):
+            angle = random.uniform(0, 2 * math.pi)
+            distance = random.uniform(100, 500)
+            mass = random.uniform(10, 50)
+            orbital_speed = math.sqrt(self.canvas.G * 10000 / distance)
+
+            self.canvas.add_particle(Particle(
+                QPointF(distance * math.cos(angle), distance * math.sin(angle)),
+                mass=mass,
+                velocity=(orbital_speed * math.sin(angle), -orbital_speed * math.cos(angle)),
+                color=QColor(random.randint(150, 255), random.randint(150, 255), random.randint(150, 255))
+            ))
+
+    def create_random_cluster(self):
+        for _ in range(50):
+            x = random.uniform(-400, 400)
+            y = random.uniform(-400, 400)
+            mass = random.uniform(10, 100)
+            vx = random.uniform(-1, 1)
+            vy = random.uniform(-1, 1)
+
+            self.canvas.add_particle(Particle(
+                QPointF(x, y),
+                mass=mass,
+                velocity=(vx, vy),
+                color=QColor(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+            ))
+
 
     def create_controls(self):
         dock = QDockWidget("Controls", self)
@@ -183,6 +348,14 @@ class GravitySimulator(QMainWindow):
         btn_layout.addWidget(clear_btn)
         layout.addLayout(btn_layout)
 
+        reset_view_btn = QPushButton("Reset View")
+        reset_view_btn.clicked.connect(self.reset_view)
+        btn_layout.addWidget(reset_view_btn)
+
+        preset_btn = QPushButton("Preset Systems")
+        preset_btn.clicked.connect(self.show_presets)
+        layout.addWidget(preset_btn)  # Add to the local layout
+
         controls.setLayout(layout)
         dock.setWidget(controls)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
@@ -190,6 +363,12 @@ class GravitySimulator(QMainWindow):
     def clear_canvas(self):
         self.canvas.particles = []
         self.canvas.update()
+
+    def reset_view(self):
+        self.canvas.offset = QPointF(0, 0)
+        self.canvas.scale = 1.0
+        self.canvas.update()
+
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:
